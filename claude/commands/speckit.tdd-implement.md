@@ -12,12 +12,14 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Overview
 
-This command implements tasks.md using a **TDD Agent Team** pattern:
+This command implements tasks.md using a **TDD Agent Team** pattern that follows the
+classic **Red → Green → Refactor** cycle:
 
 - **Leader (you)**: Orchestrates the workflow, tracks progress, makes decisions
-- **Test Agent**: Writes tests for each user story (contract tests + unit tests)
-- **Dev Agent**: Implements code to make tests pass
-- **Verification**: Leader runs tests after each Dev Agent completes
+- **Test Agent (Red)**: Writes failing tests first for each user story (contract tests + unit tests)
+- **Dev Agent (Green)**: Implements the minimum code to make tests pass
+- **Refactor Agent (Refactor)**: Improves the design while keeping every test green
+- **Verification**: Leader runs tests after each Dev Agent and after each Refactor Agent
 
 ## Execution Protocol
 
@@ -44,13 +46,15 @@ This command implements tasks.md using a **TDD Agent Team** pattern:
    Phase 1 (Setup): T001-T007 → Leader executes directly (small infra tasks)
    Phase 2 (Foundational): T008-T015 → Leader executes directly (schemas, deps, routing)
    Phase 3 (US1):
-     Test Tasks: T016, T017 → Test Agent
-     Impl Tasks: T018-T025 → Dev Agent
+     Test Tasks: T016, T017 → Test Agent (RED)
+     Impl Tasks: T018-T025 → Dev Agent (GREEN)
      Verify: run pytest → Leader
+     Refactor: improve design, tests stay green → Refactor Agent
    Phase 4 (US2):
-     Test Tasks: T026, T027 → Test Agent
-     Impl Tasks: T028-T030 → Dev Agent
+     Test Tasks: T026, T027 → Test Agent (RED)
+     Impl Tasks: T028-T030 → Dev Agent (GREEN)
      Verify: run pytest → Leader
+     Refactor: improve design, tests stay green → Refactor Agent
    ...
    Phase N (Polish): → Leader executes directly
    ```
@@ -68,7 +72,7 @@ Leader executes setup and foundational tasks **directly** (no agents needed for 
 
 For **each User Story phase**, execute this loop:
 
-#### Step 1: Test Agent (write tests first)
+#### Step 1: Test Agent — RED (write failing tests first)
 
 Launch an Agent with this prompt pattern:
 
@@ -103,13 +107,16 @@ RULES:
 
 Wait for Test Agent to complete. Record which test files were created.
 
-#### Step 2: Verify Tests Exist (Leader)
+#### Step 2: Verify RED (Leader)
 
 - Confirm test files were created at the expected paths
-- Optionally run tests to confirm they fail (expected — TDD red phase)
+- **Run the tests and confirm they FAIL** — this is the RED gate. Tests must fail for the
+  right reason (missing implementation), not for setup/import/syntax errors.
+- If tests pass or error out before any implementation exists, send them back to the Test
+  Agent — a test that passes with no implementation is not a valid test.
 - Mark test tasks as [x] in tasks.md
 
-#### Step 3: Dev Agent (implement to pass tests)
+#### Step 3: Dev Agent — GREEN (implement to pass tests)
 
 Launch an Agent with this prompt pattern:
 
@@ -137,7 +144,9 @@ TASKS TO COMPLETE:
 - T024: Create project list page in frontend/src/pages/Projects/index.tsx
 
 RULES:
-1. Your PRIMARY goal is making the test files pass
+1. Your PRIMARY goal is making the test files pass — this is the GREEN phase, NOT the
+   cleanup phase. Prefer the simplest code that passes; a dedicated Refactor Agent will
+   improve the design afterwards, so do NOT over-engineer or prematurely abstract here.
 2. Follow existing code patterns in the project (check existing services, models, routes)
 3. Do NOT modify any test files
 4. Implement the minimum code needed to pass tests + fulfill the task descriptions
@@ -147,7 +156,7 @@ RULES:
 
 Wait for Dev Agent to complete.
 
-#### Step 4: Run Tests (Leader Verification)
+#### Step 4: Verify GREEN — Run Tests (Leader Verification)
 
 Leader runs the test suite:
 
@@ -158,8 +167,8 @@ pytest tests/contract/test_<story>_contract.py tests/unit/test_<story>_service.p
 
 **If tests PASS:**
 - Mark all implementation tasks as [x] in tasks.md
-- Report: "✅ US{N} complete — {X} tests passed"
-- Proceed to next User Story
+- Report: "✅ US{N} GREEN — {X} tests passed"
+- Proceed to Step 5 (Refactor) — do NOT skip straight to the next User Story
 
 **If tests FAIL:**
 - Analyze the failure output
@@ -182,11 +191,49 @@ Fix the implementation to make all tests pass. Do NOT modify test files.
   - Report the failures to the user
   - Ask whether to continue to next story or stop
 
-#### Step 5: Integration Check (Leader)
+#### Step 5: Refactor Agent — REFACTOR (improve design while green)
 
-After all tests pass for a user story:
+Now that the story is GREEN, improve the code's internal quality **without changing behavior**.
+This is the third leg of Red → Green → Refactor and is what separates real TDD from
+"test-first batch coding".
+
+Launch an Agent with this prompt pattern:
+
+```
+You are the REFACTOR AGENT for a TDD workflow. All tests for this user story currently PASS.
+Your job is to improve the internal quality of the production code WITHOUT changing its behavior.
+
+CONTEXT:
+- Feature: [feature name]
+- User Story: [story description]
+
+FILES THE DEV AGENT CREATED/MODIFIED (refactor scope):
+[List the production files from Step 3 — do NOT touch other stories' code]
+
+PASSING TESTS (your safety net — they MUST stay green):
+[List the test files for this story]
+
+RULES:
+1. Do NOT modify any test files and do NOT change observable behavior
+2. Do NOT add new features or new test cases — refactor only
+3. Target real code smells: duplication, poor names, long functions, leaky abstractions,
+   dead code, inconsistent patterns vs. the rest of the project
+4. Make small, behavior-preserving changes; keep the code idiomatic to the project
+5. If the code is already clean, say so and change nothing — do NOT refactor for its own sake
+6. Return the list of files you changed and a one-line summary of each refactor
+```
+
+Wait for Refactor Agent to complete, then **re-run the story's tests** to confirm they are
+still green. If the refactor broke a test, treat it like a GREEN failure: send the Refactor
+Agent the failing output to fix (it must restore green without modifying tests), retry up to
+2 times, and if still red, revert the refactor and keep the last known-green implementation.
+
+#### Step 6: Integration Check (Leader)
+
+After the story is GREEN and refactored:
 - Run the FULL test suite (not just this story) to check for regressions
 - If regressions found, launch Dev Agent to fix
+- Report: "✅ US{N} complete — {X} tests passed, refactored"
 
 ### Final Phase: Polish (Leader Direct)
 
@@ -210,6 +257,12 @@ Execute polish tasks directly:
 3. The schemas and dependencies already created in foundational phase
 4. The exact file paths from task descriptions
 
+### For Refactor Agent prompts, ALWAYS include:
+1. The exact list of production files the Dev Agent created/modified (refactor scope)
+2. The passing test files for this story (the safety net that must stay green)
+3. Relevant project conventions/patterns so refactors stay idiomatic
+4. An explicit reminder: behavior-preserving only, no test edits, no new features
+
 ### Context Management:
 - Each agent gets ONLY the context it needs (minimize prompt size)
 - Include file contents inline rather than asking agents to read files
@@ -220,22 +273,26 @@ Execute polish tasks directly:
 After each User Story completes, output a progress table:
 
 ```
-| Phase      | Story | Tests | Impl  | Status  |
-|------------|-------|-------|-------|---------|
-| Setup      | -     | -     | 7/7   | ✅ Done |
-| Foundation | -     | -     | 8/8   | ✅ Done |
-| US1        | P1    | 2/2   | 8/8   | ✅ Done |
-| US2        | P1    | 2/2   | 3/3   | ✅ Done |
-| US3        | P2    | 0/2   | 0/3   | ⏳ Next |
-| US4        | P2    | -     | 0/3   | ⬜ Wait |
-| US5        | P3    | -     | 0/3   | ⬜ Wait |
-| Polish     | -     | -     | 0/5   | ⬜ Wait |
+| Phase      | Story | Tests (Red) | Impl (Green) | Refactor | Status  |
+|------------|-------|-------------|--------------|----------|---------|
+| Setup      | -     | -           | 7/7          | -        | ✅ Done |
+| Foundation | -     | -           | 8/8          | -        | ✅ Done |
+| US1        | P1    | 2/2         | 8/8          | ✅       | ✅ Done |
+| US2        | P1    | 2/2         | 3/3          | ✅       | ✅ Done |
+| US3        | P2    | 0/2         | 0/3          | ⬜       | ⏳ Next |
+| US4        | P2    | -           | 0/3          | ⬜       | ⬜ Wait |
+| US5        | P3    | -           | 0/3          | ⬜       | ⬜ Wait |
+| Polish     | -     | -           | 0/5          | -        | ⬜ Wait |
 ```
 
 ## Error Recovery
 
 - **Test Agent fails**: Retry once with more context. If still fails, Leader writes tests directly.
+- **Tests pass before any implementation (invalid RED)**: Send back to Test Agent — the test
+  isn't exercising the new behavior.
 - **Dev Agent fails 3 times**: Stop, report to user with detailed error context.
+- **Refactor breaks tests**: Retry Refactor Agent up to 2 times with the failing output; if
+  still red, revert the refactor and keep the last known-green implementation.
 - **Regression detected**: Launch targeted Dev Agent with regression test output.
 - **Context too large**: Split User Story into sub-batches (backend first, then frontend).
 
@@ -243,8 +300,10 @@ After each User Story completes, output a progress table:
 
 | Aspect | speckit.implement | speckit.tdd-implement |
 |--------|-------------------|----------------------|
-| Test writing | Mixed with implementation | Dedicated Test Agent, tests first |
-| Implementation | Sequential single-threaded | Dev Agent writes code to pass tests |
-| Verification | Manual/end-of-phase | Automated after each story |
+| Cycle | Build then test | Red → Green → Refactor per story |
+| Test writing | Mixed with implementation | Dedicated Test Agent, failing tests first |
+| Implementation | Sequential single-threaded | Dev Agent writes minimum code to pass tests |
+| Refactoring | Ad hoc / none | Dedicated Refactor Agent while tests stay green |
+| Verification | Manual/end-of-phase | Automated after Green and after Refactor |
 | Error recovery | Halt on failure | Retry loop with error context |
 | Context management | Single large context | Scoped context per agent |
