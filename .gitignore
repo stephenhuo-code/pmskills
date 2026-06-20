@@ -1,1 +1,4 @@
 .DS_Store
+
+# claude-eng-kit 安装产物:per-machine 桥接软链(由 claude-eng-kit/install.sh 生成,绝对路径,勿提交)
+claude/skills/writing-specs
